@@ -1,7 +1,6 @@
 # Target library
 lib := libfs.a
 
-targets := fs 
 objs := fs.o disk.o 
 
 CC := gcc
@@ -19,10 +18,6 @@ deps := $(patsubst %.o,%.d,$(objs))
 
 ## TODO: Phase 1
 
-fs: $(objs) 
-	@echo "CC $@"
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
 %.o: %.c
 	@echo "CC $@"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
@@ -33,4 +28,4 @@ $(lib): $(objs)
 
 clean:
 	@echo "CLEAN"
-	$(Q)rm -f $(targets) $(objs) $(deps)
+	$(Q)rm -f $(objs) $(deps)
