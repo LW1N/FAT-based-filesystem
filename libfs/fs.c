@@ -120,15 +120,16 @@ int fs_mount(const char *diskname)
 	  fprintf(stderr, "Wrong data index\n");
 	  return -1;
   }
-  // Check correct number of FAT blocks
-  if ((superB->numFATBlocks*BLOCK_SIZE) != (superB->numDataBlocks * 2)) {
-    fprintf(stderr, "Wrong number of FAT blocks\n");
-	  return -1;
-  }
+  // // Check correct number of FAT blocks
+  // uint8_t FATCheck = (((superB->numDataBlocks * 2) - 1)/BLOCK_SIZE) + 1;
+  // if ((superB->numFATBlocks) != FATCheck) {
+  //   fprintf(stderr, "Wrong number of FAT blocks\n");
+	//   return -1;
+  // }
 
   // Read FAT(next blocks of fs)
   // Allocate memory for 1D array of fat entries
-  fat = malloc(superB->numDataBlocks*sizeof(struct FAT*));
+  fat = malloc(superB->numFATBlocks*ENTRIES_PER_FAT_BLOCK*sizeof(struct FAT*));
   // Read FAT block[s](total # found in superblock) into 2D buffer
   struct FAT FATBuffer[superB->numFATBlocks][ENTRIES_PER_FAT_BLOCK];
   for (int i = 1; i < superB->numFATBlocks + 1; i++) {
@@ -208,6 +209,11 @@ int fs_info(void)
       FATFree++;
     }
   }
+  // for (uint16_t i = 0; i < superB->numDataBlocks; i+=16) {
+  //   if(fat[i].entry == 0){
+  //     FATFree++;
+  //   }
+  // }
   for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
     if(rootD[i].fileName[0] == 0){
       rootDFree++;
@@ -222,17 +228,18 @@ int fs_info(void)
 	printf("data_blk=%d\n", superB->dataIndex);
 	printf("data_blk_count=%d\n", superB->numDataBlocks);
   printf("fat_free_ratio=%d/%d\n", FATFree, superB->numDataBlocks);
-  printf("rdir_free_ration=%d/%d\n", rootDFree, FS_FILE_MAX_COUNT);
+  printf("rdir_free_ratio=%d/%d\n", rootDFree, FS_FILE_MAX_COUNT);
 	return 0;
 }
 
-// Helper function to find free FAT block
+// HELPER FUNCTION - finds free FAT block
 int find_freeFAT(){
-  for (int i = 0; i < (superB->numFATBlocks)*ENTRIES_PER_FAT_BLOCK; i++) {
+  for (int i = superB->dataIndex; i < superB->numDataBlocks; i++) {
     if(fat[i].entry == 0){
       return i;
     }
   }
+
   // In case of no room
   return -1;
 }
@@ -245,7 +252,7 @@ int fs_create(const char *filename)
   if (!FS || !filename) {
 		return -1;
 	}
-  // Filename length too long
+  // Length of filename too long
   if (strlen(filename) > FS_FILENAME_LEN) {
     return -1;
   }
@@ -267,7 +274,7 @@ int fs_create(const char *filename)
   int foundI = -1;
   for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
     // If entry is empty, grab index
-    if(rootD[i].fileName[0] == '\0'){
+    if((char)rootD[i].fileName[0] == '\0'){
       foundI = i;
       break;
     }
@@ -281,8 +288,8 @@ int fs_create(const char *filename)
   // Else, set found empty entry to new filename
   strcpy((char*)rootD[foundI].fileName, filename);
   rootD[foundI].size = 0;
-  rootD[foundI].firstIndex = find_freeFAT();
-  fat[rootD[foundI].firstIndex].entry = FAT_EOC;
+  rootD[foundI].firstIndex = FAT_EOC;
+  // fat[rootD[foundI].firstIndex].entry = FAT_EOC;
   return 0;
 }
 
@@ -303,10 +310,12 @@ int fs_delete(const char *filename)
       break;
     }
   }
+
   // If file isn't found, return -1
   if (foundI == -1) {
     return -1;
   }
+
   // Else, reset name and empty FAT data blocks
   rootD[foundI].fileName[0] = '\0';
   // Iterate through FAT data blocks, stop at beginning of next file
@@ -316,6 +325,7 @@ int fs_delete(const char *filename)
     fat[ind].entry = 0;
     ind = ind2;
   }
+  // for(uint16_t i; i < )
   return 0;
 }
 
@@ -353,24 +363,53 @@ int fs_open(const char *filename)
   }
 
   // Find the file in the root directory
-  for (int i = 0; i < FS_FILE_MAX_COUNT; i++){
-    // If file found, find empty file descriptor entry
-    if (!strncmp((char*)rootD[i].fileName, filename, strlen(filename))){
-      for (int j = 0; j < FS_OPEN_MAX_COUNT; j++){
-        // If empty FD found, initialize and return file descriptor
-        if(fds[j].ID == -1){
-          fds[j].ID = currentID;
-          fds[j].index = j;
-          fds[j].offset = 0;
-
-          currentID++;
-          numOpenFiles++;
-          return fds[j].ID;
-        }
-      }
+  int foundI = -1;
+  for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
+    if (!strncmp((char*)rootD[i].fileName, filename, strlen(filename))) {
+      foundI = i;
+      break;
     }
   }
-  // If file wasn't found
+
+  // If file isn't found, return -1
+  if (foundI == -1) {
+    fprintf(stderr, "WASN'T FOUND\n");
+    return -1;
+  }
+
+  // Find empty file descriptor entry
+  for (int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
+    if (fds[i].ID == -1) {
+      fds[i].ID = currentID;
+      fds[i].index = i;
+      fds[i].offset = 0;
+      currentID++;
+      numOpenFiles++;
+      return fds[i].ID;
+    }
+  }
+
+  // If file descriptor array is full
+  return -1;
+}
+
+// HELPER FUNCTION - finds index of fds given fds.ID
+int find_fdsIndex(int fd) {
+  // ERROR CHECKING
+  // Invalid fd(out of bounds or not currently open)
+  if (fd > currentID || fd < 0) {
+    return -1;
+  }
+
+  // Find file in fds
+  for (int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
+    // If found, return index of file in fds array
+    if (fds[i].ID == fd) {
+      return i;
+    }
+  }
+
+  // If given fd is not in array of file descriptors
   return -1;
 }
 
@@ -382,25 +421,25 @@ int fs_close(int fd)
   if (!FS) {
     return -1;
   }
-  // Invalid fd(out of bounds or not currently open)
-  if (fd > currentID || fd < 0) {
+  // Invalid fd(not currently open or out of bounds)
+  if (fd < 0 || fd > currentID) {
     return -1;
   }
 
   // Find given FD in fds
-  for (int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
-    // If found, reset FD in fds
-    if(fds[i].ID == fd) {
-      fds[i].ID = -1;
-      fds[i].offset = 0;
-      fds[i].index = -1;
-      numOpenFiles--;
-      return 0;
-    }
+  int ind = find_fdsIndex(fd);
+
+  // If given fd is not in array of file descriptors
+  if (ind == -1) {
+    return -1;
   }
 
-  // If file wasn't found
-  return -1;
+  // If found, reset FD values in fds
+  fds[ind].ID = -1;
+  fds[ind].offset = 0;
+  fds[ind].index = -1;
+  numOpenFiles--;
+  return 0;
 }
 
 int fs_stat(int fd)
@@ -411,21 +450,21 @@ int fs_stat(int fd)
   if (!FS) {
     return -1;
   }
-  // Invalid fd(out of bounds or not currently open)
-  if (fd > currentID || fd < 0) {
+  // Invalid fd(not currently open or out of bounds)
+  if (fd < 0 || fd > currentID) {
     return -1;
   }
 
   // Find given FD in fds
-  for (int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
-    // If found, return size of file pointed to by FD
-    if (fds[i].ID == fd) {
-      return rootD[fds[i].index].size;
-    }
+  int ind = find_fdsIndex(fd);
+
+  // If given fd is not in array of file descriptors
+  if (ind == -1) {
+    return -1;
   }
 
-  // If file wasn't found
-  return -1;
+  // If found, grab and return size of file pointed to by FD
+  return rootD[fds[ind].index].size;
 }
 
 int fs_lseek(int fd, size_t offset)
@@ -435,43 +474,26 @@ int fs_lseek(int fd, size_t offset)
   int fsize = fs_stat(fd);
 
   // ERROR CHECKING
-  // fs_stat fails or offset is greater than file size
+  // fs_stat fails or given offset > than actual file size
   if (fsize == -1 || fsize < (int)offset) {
     return -1;
   }
   
-  // Find file in fds and set new offset
-  for (int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
-    if (fds[i].ID == fd) {
-      fds[i].offset = offset;
-      return 0;
-    }
-  }
-  
-  // If file wasn't found
-  return -1;
-}
+  // Find file in fds
+  int ind = find_fdsIndex(fd);
 
-// Helper function to find index of fds given fds.ID
-int find_fdsIndex(int fd) {
-  // ERROR CHECKING
-  // Invalid fd(out of bounds or not currently open)
-  if (fd > currentID || fd < 0) {
+  // If given fd is not in array of file descriptors
+  if (ind == -1) {
     return -1;
   }
 
-  for (int i = 0; i < FS_OPEN_MAX_COUNT; i++) {
-    if (fds[i].ID == fd) {
-      return i;
-    }
-  }
-
-  // If file wasn't found
-  return -1;
+  // If found, set offset of file to given offset
+  fds[ind].offset = offset;
+  return 0;
 }
 
-// Helper function to find index of data block according to fd offset
-int find_DBlockIndex(int fd) {
+// HELPER FUNCTION - finds index of data block indicated by offset of fd
+int find_DBIndex(int fd) {
   // Grab index of fds from fds.ID
   int fdIndex = find_fdsIndex(fd);
   // Grab index of file in root directory
@@ -535,15 +557,15 @@ int fs_write(int fd, void *buf, size_t count)
       rOffset = BLOCK_SIZE - remainBytes - lOffset;
     }
 
-    // Read data block into bounceBuffer
+    // Bounce buffer to read entire data block into
     void *bounceBuffer = malloc(BLOCK_SIZE);
     // If can't find data block & no free FAT blocks
-    if (find_DBlockIndex(fd) == -1 && find_freeFAT() == -1) {
+    if (find_DBIndex(fd) == -1 && find_freeFAT() == -1) {
       rootD[rootDIndex].size += count - remainBytes;
       return count - remainBytes;
     }
-    // If there are free FAT blocks, allocate new data block
-    if (find_DBlockIndex(fd) == -1) {
+    // If can't find data block & free FAT blocks, allocate new data block
+    if (find_DBIndex(fd) == -1) {
       // Grab index of data block
       uint16_t DBIndex = rootD[rootDIndex].firstIndex;
       // Iterate through FAT until we find FAT_EOC
@@ -551,32 +573,42 @@ int fs_write(int fd, void *buf, size_t count)
       while (fat[FATIndex].entry != FAT_EOC) {
         FATIndex = fat[FATIndex].entry;
       }
+      // uint16_t FATInd;
+      // for (FATInd = DBIndex; FATInd < superB->numDataBlocks - 1; FATInd++) {
+      //   if(fat[FATInd + 1].entry == FAT_EOC){
+      //     break;
+      //   }
+      // }
       // Check for free FAT blocks
       int newIndex = find_freeFAT();
-      // If none, no bytes were written
-      if (newIndex == -1) {
-        return 0;
+      // If available FAT block(s), expand FAT links
+      if (newIndex != -1) {
+        fat[FATIndex].entry = newIndex;
+        fat[fat[FATIndex].entry].entry = FAT_EOC;
       }
-      fat[FATIndex].entry = newIndex;
-      fat[fat[FATIndex].entry].entry = FAT_EOC;
     }
-    if (block_read(find_DBlockIndex(fd), bounceBuffer) == -1) {
-      fprintf(stderr, "Block reading ERROR\n");
-      return -1;
+    // If there is a data block, read DB into bounceBuffer
+    if (find_DBIndex(fd) != -1) {
+      block_read(find_DBIndex(fd), bounceBuffer);
     }
+    // if (block_read(find_DBIndex(fd), bounceBuffer) == -1) {
+    //   fprintf(stderr, "Block reading ERROR\n");
+    //   return -1;
+    // }
 
     // Write into bounceBuffer, keep offsets in mind
     writtenBytes = BLOCK_SIZE - lOffset - rOffset;
     memcpy((char*)bounceBuffer+lOffset, (char*)buf+bufferOffset, writtenBytes);
 
     // Write back to disk
-    block_write(find_DBlockIndex(fd), buf);
+    block_write(find_DBIndex(fd), buf);
 
-    // Update variables
+    // Update variables & free allocated mem for bounce buffer each iteration
     fds[fd].offset += writtenBytes;
     bufferOffset += writtenBytes;
     remainBytes -= writtenBytes;
     free(bounceBuffer);
+    bounceBuffer = NULL;
     ind++;
   }
 
@@ -623,7 +655,7 @@ int fs_read(int fd, void *buf, size_t count)
 
     // Read data block into bounceBuffer
     void *bounceBuffer = malloc(BLOCK_SIZE);
-    if (block_read(find_DBlockIndex(fd), bounceBuffer) == -1) {
+    if (block_read(find_DBIndex(fd), bounceBuffer) == -1) {
       fprintf(stderr, "Block reading ERROR\n");
       return -1;
     }
