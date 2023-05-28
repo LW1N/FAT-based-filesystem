@@ -120,12 +120,6 @@ int fs_mount(const char *diskname)
 	  fprintf(stderr, "Wrong data index\n");
 	  return -1;
   }
-  // // Check correct number of FAT blocks
-  // uint8_t FATCheck = (((superB->numDataBlocks * 2) - 1)/BLOCK_SIZE) + 1;
-  // if ((superB->numFATBlocks) != FATCheck) {
-  //   fprintf(stderr, "Wrong number of FAT blocks\n");
-	//   return -1;
-  // }
 
   // Read FAT(next blocks of fs)
   // Allocate memory for 1D array of fat entries
@@ -181,7 +175,6 @@ int fs_umount(void)
   }
 	block_write(superB->rootIndex, rootD);
 
-  // FREE SPACE?????????????!?!?!!?
   free(fat);
 
 	// If no disk is currently open, return -1
@@ -209,11 +202,7 @@ int fs_info(void)
       FATFree++;
     }
   }
-  // for (uint16_t i = 0; i < superB->numDataBlocks; i+=16) {
-  //   if(fat[i].entry == 0){
-  //     FATFree++;
-  //   }
-  // }
+
   for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
     if(rootD[i].fileName[0] == 0){
       rootDFree++;
@@ -256,13 +245,7 @@ int fs_create(const char *filename)
   if (strlen(filename) > FS_FILENAME_LEN) {
     return -1;
   }
-  // // Check if filename contains invalid characters
-  // char* invalid = "!@%^*";
-  // for (int i = 0; i < strlen(invalid); i++) {
-  //   if (strchr(filename, invalid[i])){
-  //     return -1;
-  //   }
-  // }
+
   // Check if filename already exists
   for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
     if (!strncmp((char*)rootD[i].fileName, filename, strlen(filename))) {
@@ -325,7 +308,7 @@ int fs_delete(const char *filename)
     fat[ind].entry = 0;
     ind = ind2;
   }
-  // for(uint16_t i; i < )
+  
   return 0;
 }
 
@@ -373,7 +356,7 @@ int fs_open(const char *filename)
 
   // If file isn't found, return -1
   if (foundI == -1) {
-    fprintf(stderr, "WASN'T FOUND\n");
+    
     return -1;
   }
 
@@ -503,18 +486,25 @@ int find_DBIndex(int fd) {
   // Grab file offset
   int offset = fds[fd].offset;
 
-  // Loop until offset goes over current data block
+  // If empty file, return -1
+  if (DBIndex == FAT_EOC) {
+    return -1;
+  }
+
+  // Iterate through file's datablocks until datablock containing offset of file
   while (offset >= BLOCK_SIZE) {
-    // Move onto next block
+    // Grab next data block of file
     DBIndex = fat[DBIndex].entry;
-    // If next index wasn't allocated
+    // If next index wasn't allocated, out of bounds of file
     if (DBIndex == FAT_EOC) {
       return -1;
     }
-
+    // Subtract BLOCK_SIZE after entering a new data block
     offset = offset - BLOCK_SIZE;
   }
 
+  // Actual index of data block containing offset of file
+  // Need to account for actual data block start index from superblock
   return DBIndex + superB->dataIndex;
 }
 
@@ -537,71 +527,74 @@ int fs_write(int fd, void *buf, size_t count)
 
   // Index of file in root directory
   int rootDIndex = fds[fdIndex].index;
-  // Write buffer offset
+  // Offset of buffer holding stuff to write
   int bufferOffset = 0;
   // Remaing # of bytes to write
   size_t remainBytes = count;
   // Left & right offsets, # of bytes written
   size_t lOffset, rOffset, writtenBytes;
 
+  int DBIndex = -1;
+
   // Loop until no more bytes to write
   int ind = 0;
   while (remainBytes != 0) {
     lOffset = 0;
+    // Left offset != 0 only during first block read
     if (ind == 0) {
       lOffset = fds[fdIndex].offset % BLOCK_SIZE;
     }
 
     rOffset = 0;
+    // Right offset != 0 if don't need to read another block
     if (remainBytes + lOffset < BLOCK_SIZE) {
       rOffset = BLOCK_SIZE - remainBytes - lOffset;
     }
 
+    DBIndex = find_DBIndex(fd);
+
     // Bounce buffer to read entire data block into
     void *bounceBuffer = malloc(BLOCK_SIZE);
     // If can't find data block & no free FAT blocks
-    if (find_DBIndex(fd) == -1 && find_freeFAT() == -1) {
+    if (DBIndex == -1 && find_freeFAT() == -1) {
       rootD[rootDIndex].size += count - remainBytes;
       return count - remainBytes;
     }
     // If can't find data block & free FAT blocks, allocate new data block
-    if (find_DBIndex(fd) == -1) {
-      // Grab index of data block
-      uint16_t DBIndex = rootD[rootDIndex].firstIndex;
-      // Iterate through FAT until we find FAT_EOC
-      uint16_t FATIndex = DBIndex;
+    if (DBIndex == -1) {
+      // Check for free FAT blocks
+      int newIndex = find_freeFAT();
+      // Grab index of first data block of file
+      uint16_t FATIndex = rootD[rootDIndex].firstIndex;
+      // If empty file(first DBBlock == FAT_EOC), set first DBindex of file
+      if (FATIndex == FAT_EOC && newIndex != -1) {
+        rootD[rootDIndex].firstIndex = newIndex;
+        fat[FATIndex].entry = newIndex;
+        fat[fat[FATIndex].entry].entry = FAT_EOC;
+      }
+      // Iterate through FAT until entry that points to index of FAT_EOC
       while (fat[FATIndex].entry != FAT_EOC) {
         FATIndex = fat[FATIndex].entry;
       }
-      // uint16_t FATInd;
-      // for (FATInd = DBIndex; FATInd < superB->numDataBlocks - 1; FATInd++) {
-      //   if(fat[FATInd + 1].entry == FAT_EOC){
-      //     break;
-      //   }
-      // }
-      // Check for free FAT blocks
-      int newIndex = find_freeFAT();
-      // If available FAT block(s), expand FAT links
-      if (newIndex != -1) {
+      // FATIndex is now index of FAT_EOC
+      // If available FAT block(s), expand FAT link by 1 to found free FAT block
+      if (fat[FATIndex].entry != newIndex && newIndex != -1) {
         fat[FATIndex].entry = newIndex;
         fat[fat[FATIndex].entry].entry = FAT_EOC;
       }
     }
     // If there is a data block, read DB into bounceBuffer
-    if (find_DBIndex(fd) != -1) {
-      block_read(find_DBIndex(fd), bounceBuffer);
+    if (DBIndex != -1) {
+      block_read(DBIndex, bounceBuffer);
     }
-    // if (block_read(find_DBIndex(fd), bounceBuffer) == -1) {
-    //   fprintf(stderr, "Block reading ERROR\n");
-    //   return -1;
-    // }
 
     // Write into bounceBuffer, keep offsets in mind
     writtenBytes = BLOCK_SIZE - lOffset - rOffset;
     memcpy((char*)bounceBuffer+lOffset, (char*)buf+bufferOffset, writtenBytes);
 
+    DBIndex = find_DBIndex(fd);
     // Write back to disk
-    block_write(find_DBIndex(fd), buf);
+    block_write(DBIndex, buf);
 
     // Update variables & free allocated mem for bounce buffer each iteration
     fds[fd].offset += writtenBytes;
