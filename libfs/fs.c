@@ -356,7 +356,6 @@ int fs_open(const char *filename)
 
   // If file isn't found, return -1
   if (foundI == -1) {
-    
     return -1;
   }
 
@@ -505,7 +504,7 @@ int find_DBIndex(int fd) {
 
   // Actual index of data block containing offset of file
   // Need to account for actual data block start index from superblock
-  return DBIndex + superB->dataIndex;
+  return DBIndex; // + superB->dataIndex;
 }
 
 int fs_write(int fd, void *buf, size_t count)
@@ -566,11 +565,15 @@ int fs_write(int fd, void *buf, size_t count)
       int newIndex = find_freeFAT();
       // Grab index of first data block of file
       uint16_t FATIndex = rootD[rootDIndex].firstIndex;
-      // If empty file(first DBBlock == FAT_EOC), set first DBindex of file
-      if (FATIndex == FAT_EOC && newIndex != -1) {
+      // If empty file size = 0,(first DBBlock == FAT_EOC), set first DBindex of file
+      if (FATIndex == FAT_EOC && newIndex != -1 && rootD[rootDIndex].size == 0) {
+        // index of first data block equal to newIndex
+        // i.e. 0xFFFF 0 0 3 0 0 0 0 0 0 ... 
         rootD[rootDIndex].firstIndex = newIndex;
-        fat[FATIndex].entry = newIndex;
-        fat[fat[FATIndex].entry].entry = FAT_EOC;
+        // fat[65535] = 3
+        FATIndex = newIndex;
+        // fat[3] = 0xFFFF
+        fat[newIndex].entry = FAT_EOC;
       }
       // Iterate through FAT until entry that points to index of FAT_EOC
       while (fat[FATIndex].entry != FAT_EOC) {
@@ -594,7 +597,7 @@ int fs_write(int fd, void *buf, size_t count)
 
     DBIndex = find_DBIndex(fd);
     // Write back to disk
-    block_write(DBIndex, buf);
+    block_write(DBIndex, bounceBuffer);
 
     // Update variables & free allocated mem for bounce buffer each iteration
     fds[fd].offset += writtenBytes;
