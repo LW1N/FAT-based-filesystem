@@ -504,7 +504,7 @@ int find_DBIndex(int fd) {
 
   // Actual index of data block containing offset of file
   // Need to account for actual data block start index from superblock
-  return DBIndex; // + superB->dataIndex;
+  return DBIndex + superB->dataIndex;
 }
 
 int fs_write(int fd, void *buf, size_t count)
