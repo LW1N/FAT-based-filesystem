@@ -223,7 +223,7 @@ int fs_info(void)
 
 // HELPER FUNCTION - finds free FAT block
 int find_freeFAT(){
-  for (int i = superB->dataIndex; i < superB->numDataBlocks; i++) {
+  for (int i = 1; i < superB->numDataBlocks; i++) {
     if(fat[i].entry == 0){
       return i;
     }
@@ -557,6 +557,7 @@ int fs_write(int fd, void *buf, size_t count)
     // If can't find data block & no free FAT blocks
     if (DBIndex == -1 && find_freeFAT() == -1) {
       rootD[rootDIndex].size += count - remainBytes;
+      fprintf(stderr, "count: %ld, remainBytes %ld\n", count, remainBytes);
       return count - remainBytes;
     }
     // If can't find data block & free FAT blocks, allocate new data block
